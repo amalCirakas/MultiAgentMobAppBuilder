@@ -1,0 +1,7 @@
+crewai
+crewai-tools
+langchain-anthropic
+langchain-google-genai
+langgraph
+litellm
+python-dotenv>=1.1.1,<1.3

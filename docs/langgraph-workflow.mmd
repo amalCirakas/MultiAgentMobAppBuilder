@@ -1,0 +1,25 @@
+---
+config:
+  flowchart:
+    curve: linear
+---
+graph TD;
+	__start__([<p>__start__</p>]):::first
+	contract_architect(contract_architect)
+	validation(validation)
+	data_layer(data_layer)
+	ui(ui)
+	qa(qa)
+	workflow_reporter(workflow_reporter)
+	__end__([<p>__end__</p>]):::last
+	__start__ --> contract_architect;
+	contract_architect --> data_layer;
+	contract_architect --> validation;
+	data_layer --> ui;
+	qa --> workflow_reporter;
+	ui --> qa;
+	validation --> ui;
+	workflow_reporter --> __end__;
+	classDef default fill:#f2f0ff,line-height:1.2
+	classDef first fill-opacity:0
+	classDef last fill:#bfb6fc
