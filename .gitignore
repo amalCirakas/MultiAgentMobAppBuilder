@@ -1,7 +1,10 @@
 .env
 .env.local
+node_modules/
 .venv/
 venv/
+docker/lightrag/.env
+docker/lightrag/data/
 
 # Terminal app builder outputs (per slug); keep folder tracked with .gitkeep only
 Project/*

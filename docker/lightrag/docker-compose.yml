@@ -1,0 +1,29 @@
+services:
+  lightrag:
+    image: ghcr.io/hkuds/lightrag:v1.4.13
+    container_name: multiagent-lightrag
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${LIGHTRAG_PORT:-9621}:9621"
+    volumes:
+      - ./data:/app/data
+    environment:
+      HOST: 0.0.0.0
+      PORT: 9621
+      LIGHTRAG_API_KEY: ${LIGHTRAG_API_KEY:-}
+      WHITELIST_PATHS: ${WHITELIST_PATHS:-/health,/api/*}
+      LLM_BINDING: ${LLM_BINDING:-openai}
+      LLM_MODEL: ${LLM_MODEL:-gpt-4o-mini}
+      LLM_BINDING_HOST: ${LLM_BINDING_HOST:-https://api.openai.com/v1}
+      LLM_BINDING_API_KEY: ${LLM_BINDING_API_KEY:-}
+      EMBEDDING_BINDING: ${EMBEDDING_BINDING:-openai}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-text-embedding-3-small}
+      EMBEDDING_BINDING_HOST: ${EMBEDDING_BINDING_HOST:-https://api.openai.com/v1}
+      EMBEDDING_BINDING_API_KEY: ${EMBEDDING_BINDING_API_KEY:-}
+      EMBEDDING_DIM: ${EMBEDDING_DIM:-1536}
+      MAX_ASYNC: ${MAX_ASYNC:-4}
+      MAX_PARALLEL_INSERT: ${MAX_PARALLEL_INSERT:-2}
+      CHUNK_SIZE: ${CHUNK_SIZE:-1200}
+      CHUNK_OVERLAP_SIZE: ${CHUNK_OVERLAP_SIZE:-100}
+      TOP_K: ${TOP_K:-40}
+      ENABLE_LLM_CACHE: ${ENABLE_LLM_CACHE:-true}

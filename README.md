@@ -106,6 +106,11 @@ python3 build_app.py -y --approve-blueprints --stack backend --backend-runtime j
 | `HITL_REVIEW_TIMEOUT_SECONDS` | How long the builder waits for approval before stopping (default `3600`). |
 | `HITL_OPEN_BROWSER` | Set to `0` to print the review URL without opening a browser. |
 | `HITL_WEBHOOK_URL` | Optional webhook that receives contract metadata and the review URL. |
+| `SKIP_QUALITY_GUARDRAILS` | Set to `1` only for explicit debugging to skip TypeScript/ESLint guardrails. |
+| `LIGHTRAG_URL` | LightRAG API URL (default `http://127.0.0.1:9621`). |
+| `LIGHTRAG_API_KEY` | Optional API key sent as `X-API-Key` to LightRAG. |
+| `SKIP_LIGHTRAG_MEMORY` | Set to `1` to skip contract ingestion into LightRAG. |
+| `REQUIRE_LIGHTRAG_MEMORY` | Set to `1` to fail the build if LightRAG ingestion is unavailable. |
 
 ### Sovereign IDE / blueprint review
 
@@ -114,6 +119,51 @@ Continue.dev configuration lives in **`.continue/config.yaml`** and points to Gr
 Reusable contract templates live in **`docs/blueprints/templates/`**. Every build renders app-specific contracts into **`Project/<slug>/docs/blueprints/`** before codegen. The HITL pause node then serves those files on a local webpage with **APPROVE CONTRACT** and **REJECT CONTRACT** actions. Backend scaffold and CrewAI do not start until approval is recorded.
 
 If `HITL_WEBHOOK_URL` is set, the builder sends a JSON payload to that endpoint with the review URL, slug, stack, backend runtime, and contract paths so a human lead can open the approval page.
+
+### Topological memory with LightRAG
+
+LightRAG stores the approved architecture contracts as graph-backed memory so agents can query the system map before implementing service interactions.
+
+Start the local memory server:
+
+```bash
+cd docker/lightrag
+cp .env.example .env
+# Fill LIGHTRAG_API_KEY plus LLM/embedding provider keys in .env
+docker compose up -d
+```
+
+Check health from the repo root:
+
+```bash
+python3 lightrag_memory.py health
+```
+
+Every build renders `openapi.yaml` and `asyncapi.yaml`, waits for HITL approval, then tries to ingest the approved contracts into LightRAG before backend scaffold and CrewAI. By default, LightRAG failures warn and continue. Set `REQUIRE_LIGHTRAG_MEMORY=1` when you want memory ingestion to be mandatory.
+
+Manual commands:
+
+```bash
+python3 lightrag_memory.py build-packet --build-root Project/<slug>
+python3 lightrag_memory.py ingest --build-root Project/<slug>
+python3 lightrag_memory.py query "How should the mobile app create a note?" --mode hybrid
+```
+
+### Zero-hallucination quality guardrails
+
+Root Node tooling runs deterministic checks against any generated `Project/<slug>` app that exists locally:
+
+```bash
+npm install
+npm run quality
+```
+
+The guardrail runner discovers generated apps with `package.json` and `tsconfig.json`, then runs:
+
+- `npx tsc --noEmit` inside each generated app.
+- ESLint with `complexity: ["error", 10]` against generated `src/`, `_contracts/`, and `e2e/` TypeScript files.
+
+Husky installs a pre-commit hook via `npm run prepare`; commits run `npm run quality` automatically. `build_app.py` also runs the same guardrail after the API and React Native bundle smoke checks, so agent output must pass type and complexity checks before the build succeeds.
 
 ### Full-stack expectations (honest baseline)
 

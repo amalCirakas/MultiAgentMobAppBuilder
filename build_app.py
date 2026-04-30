@@ -268,6 +268,12 @@ def main() -> int:
             stack=stack,
             backend_runtime=backend_runtime,
         )
+        from lightrag_memory import try_ingest_build_root
+
+        try_ingest_build_root(
+            build_root,
+            require=os.getenv("REQUIRE_LIGHTRAG_MEMORY", "").strip().lower() in {"1", "true", "yes", "on"},
+        )
     except Exception as exc:
         print(f"[BLUEPRINT] {exc}", file=sys.stderr)
         return 1
@@ -371,6 +377,14 @@ def main() -> int:
         from rn_bundle_verify import verify_rn_android_bundle_smoke
 
         verify_rn_android_bundle_smoke(build_root)
+    except Exception as exc:
+        print(f"[BUILD ERROR] {exc}", file=sys.stderr)
+        return 1
+
+    try:
+        from quality_guardrails import validate_app
+
+        validate_app(build_root, install=False)
     except Exception as exc:
         print(f"[BUILD ERROR] {exc}", file=sys.stderr)
         return 1
