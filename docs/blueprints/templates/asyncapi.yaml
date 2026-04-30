@@ -1,0 +1,270 @@
+asyncapi: 3.0.0
+info:
+  title: {{APP_TITLE}} Event Contract
+  version: 0.1.0
+  summary: Reviewed source-of-truth async contract for {{APP_TITLE}}.
+  description: |
+    App prompt:
+    {{APP_PROMPT_BLOCK}}
+
+    This AsyncAPI document is generated before implementation and should be reviewed
+    at the shift-left gate. Event producers and consumers should conform to this
+    contract unless the blueprint is deliberately revised first.
+  x-app-slug: {{APP_SLUG}}
+  x-build-stack: {{BUILD_STACK}}
+  x-backend-runtime: {{BACKEND_RUNTIME}}
+defaultContentType: application/json
+servers:
+  local:
+    host: localhost:3090
+    protocol: ws
+    pathname: /events
+channels:
+  resourceEvents:
+    address: app.resource.events
+    messages:
+      resourceCreated:
+        $ref: "#/components/messages/ResourceCreated"
+      resourceUpdated:
+        $ref: "#/components/messages/ResourceUpdated"
+      resourceDeleted:
+        $ref: "#/components/messages/ResourceDeleted"
+  syncEvents:
+    address: app.sync.events
+    messages:
+      syncRequested:
+        $ref: "#/components/messages/SyncRequested"
+      syncCompleted:
+        $ref: "#/components/messages/SyncCompleted"
+      syncFailed:
+        $ref: "#/components/messages/SyncFailed"
+  notificationEvents:
+    address: app.notification.events
+    messages:
+      notificationRequested:
+        $ref: "#/components/messages/NotificationRequested"
+      notificationSent:
+        $ref: "#/components/messages/NotificationSent"
+  auditEvents:
+    address: app.audit.events
+    messages:
+      auditRecorded:
+        $ref: "#/components/messages/AuditRecorded"
+  webhookEvents:
+    address: app.webhook.events
+    messages:
+      webhookDelivered:
+        $ref: "#/components/messages/WebhookDelivered"
+operations:
+  publishResourceCreated:
+    action: send
+    channel:
+      $ref: "#/channels/resourceEvents"
+    messages:
+      - $ref: "#/channels/resourceEvents/messages/resourceCreated"
+  publishResourceUpdated:
+    action: send
+    channel:
+      $ref: "#/channels/resourceEvents"
+    messages:
+      - $ref: "#/channels/resourceEvents/messages/resourceUpdated"
+  publishResourceDeleted:
+    action: send
+    channel:
+      $ref: "#/channels/resourceEvents"
+    messages:
+      - $ref: "#/channels/resourceEvents/messages/resourceDeleted"
+  publishSyncLifecycle:
+    action: send
+    channel:
+      $ref: "#/channels/syncEvents"
+    messages:
+      - $ref: "#/channels/syncEvents/messages/syncRequested"
+      - $ref: "#/channels/syncEvents/messages/syncCompleted"
+      - $ref: "#/channels/syncEvents/messages/syncFailed"
+  subscribeNotifications:
+    action: receive
+    channel:
+      $ref: "#/channels/notificationEvents"
+    messages:
+      - $ref: "#/channels/notificationEvents/messages/notificationRequested"
+      - $ref: "#/channels/notificationEvents/messages/notificationSent"
+components:
+  messages:
+    ResourceCreated:
+      name: resource.created
+      title: Resource Created
+      payload:
+        $ref: "#/components/schemas/ResourceEvent"
+    ResourceUpdated:
+      name: resource.updated
+      title: Resource Updated
+      payload:
+        $ref: "#/components/schemas/ResourceEvent"
+    ResourceDeleted:
+      name: resource.deleted
+      title: Resource Deleted
+      payload:
+        $ref: "#/components/schemas/ResourceEvent"
+    SyncRequested:
+      name: sync.requested
+      title: Sync Requested
+      payload:
+        $ref: "#/components/schemas/SyncEvent"
+    SyncCompleted:
+      name: sync.completed
+      title: Sync Completed
+      payload:
+        $ref: "#/components/schemas/SyncEvent"
+    SyncFailed:
+      name: sync.failed
+      title: Sync Failed
+      payload:
+        $ref: "#/components/schemas/SyncFailedEvent"
+    NotificationRequested:
+      name: notification.requested
+      title: Notification Requested
+      payload:
+        $ref: "#/components/schemas/NotificationEvent"
+    NotificationSent:
+      name: notification.sent
+      title: Notification Sent
+      payload:
+        $ref: "#/components/schemas/NotificationEvent"
+    AuditRecorded:
+      name: audit.recorded
+      title: Audit Recorded
+      payload:
+        $ref: "#/components/schemas/AuditEvent"
+    WebhookDelivered:
+      name: webhook.delivered
+      title: Webhook Delivered
+      payload:
+        $ref: "#/components/schemas/WebhookEvent"
+  schemas:
+    EventEnvelope:
+      type: object
+      required: [id, type, occurredAt, source, version]
+      properties:
+        id:
+          type: string
+        type:
+          type: string
+        occurredAt:
+          type: string
+          format: date-time
+        source:
+          type: string
+        version:
+          type: string
+        correlationId:
+          type: string
+        actorId:
+          type: string
+    ResourceEvent:
+      allOf:
+        - $ref: "#/components/schemas/EventEnvelope"
+        - type: object
+          required: [resource]
+          properties:
+            resource:
+              $ref: "#/components/schemas/ResourceSnapshot"
+    ResourceSnapshot:
+      type: object
+      required: [id, title, status, updatedAt]
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        status:
+          type: string
+          enum: [draft, active, archived, deleted]
+        attributes:
+          type: object
+          additionalProperties: true
+        updatedAt:
+          type: string
+          format: date-time
+    SyncEvent:
+      allOf:
+        - $ref: "#/components/schemas/EventEnvelope"
+        - type: object
+          required: [jobId, scope, status]
+          properties:
+            jobId:
+              type: string
+            scope:
+              type: string
+              enum: [all, changed, resource]
+            status:
+              type: string
+              enum: [queued, running, completed]
+            resourceId:
+              type: string
+    SyncFailedEvent:
+      allOf:
+        - $ref: "#/components/schemas/SyncEvent"
+        - type: object
+          required: [error]
+          properties:
+            error:
+              $ref: "#/components/schemas/EventError"
+    NotificationEvent:
+      allOf:
+        - $ref: "#/components/schemas/EventEnvelope"
+        - type: object
+          required: [recipient, channel, template]
+          properties:
+            recipient:
+              type: string
+            channel:
+              type: string
+              enum: [in_app, email, push, sms, webhook]
+            template:
+              type: string
+            data:
+              type: object
+              additionalProperties: true
+    AuditEvent:
+      allOf:
+        - $ref: "#/components/schemas/EventEnvelope"
+        - type: object
+          required: [action, targetType]
+          properties:
+            action:
+              type: string
+            targetType:
+              type: string
+            targetId:
+              type: string
+            metadata:
+              type: object
+              additionalProperties: true
+    WebhookEvent:
+      allOf:
+        - $ref: "#/components/schemas/EventEnvelope"
+        - type: object
+          required: [destination, status]
+          properties:
+            destination:
+              type: string
+              format: uri
+            status:
+              type: string
+              enum: [queued, delivered, failed]
+            responseStatus:
+              type: integer
+            error:
+              $ref: "#/components/schemas/EventError"
+    EventError:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        details:
+          type: object
+          additionalProperties: true

@@ -1,6 +1,7 @@
 import os
 import random
 import re
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -12,6 +13,17 @@ from dotenv import load_dotenv
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 load_dotenv(PROJECT_ROOT / ".env")
+
+
+def get_build_root() -> Path:
+    """Filesystem root for codegen. Defaults to repo root; overridden by BUILD_ROOT (absolute or repo-relative)."""
+    raw = os.environ.get("BUILD_ROOT", "").strip()
+    if not raw:
+        return PROJECT_ROOT.resolve()
+    p = Path(raw)
+    if not p.is_absolute():
+        p = PROJECT_ROOT / p
+    return p.resolve()
 REQUIRED_FOLDERS = [
     "_contracts",
     "src/db",
@@ -141,12 +153,27 @@ MODULE_CONFIGS: Dict[str, Dict[str, object]] = {
         "service_functions": "signInUser, assignRole, queueAuthSync",
         "screen_focus": "login and role assignment workflow",
     },
+    "builder": {
+        "display_name": "User-defined application module",
+        "feature_slug": "app",
+        "screen_name": "AppScreen",
+        "contracts_path": "_contracts/app.types.ts",
+        "validation_path": "src/validation/appValidation.ts",
+        "service_path": "src/db/appService.ts",
+        "screen_path": "src/screens/AppScreen.tsx",
+        "qa_path": "e2e/app.e2e.ts",
+        "workflow_path": "docs/workflow-app.mmd",
+        "contracts_desc": "Core domain types, DTOs, and sync intent types aligned with the user prompt",
+        "service_functions": "createRecord, updateRecord, queueAppSync",
+        "screen_focus": "primary UI reflecting the user's app prompt (forms, actions, accessibility)",
+    },
 }
 
 
 def ensure_folders_exist() -> None:
+    root = get_build_root()
     for folder in REQUIRED_FOLDERS:
-        (PROJECT_ROOT / folder).mkdir(parents=True, exist_ok=True)
+        (root / folder).mkdir(parents=True, exist_ok=True)
 
 
 def get_target_module() -> str:
@@ -219,8 +246,124 @@ Critical output contract:
 """.strip()
 
 
+def write_contract_instructions_compact(relative_path: str, language_hint: str) -> str:
+    """Subset of write_contract_instructions for Groq TPM limits on late pipeline stages."""
+    directory, filename = split_path_for_file_writer(relative_path)
+    return (
+        f'Output one file `{relative_path}` via FileWriterTool: filename="{filename}", '
+        f'directory="{directory}", overwrite:true, valid {language_hint} only, no fences.\n'
+    )
+
+
+def truncate_app_prompt_chars(text: str, max_chars: int) -> str:
+    if len(text) <= max_chars:
+        return text
+    head = max(80, max_chars // 2 - 35)
+    tail = max_chars - head - 35
+    tail = max(80, tail)
+    return (
+        text[:head]
+        + "\n...[APP_PROMPT truncated for Groq token budget; upstream stages used full prompt]...\n"
+        + text[-tail:]
+    )
+
+
+# React Native Android rejects some roles on RCTText at runtime (native redbox).
+UI_RN_ANDROID_ACCESSIBILITY_RULES = (
+    "\n\n=== React Native accessibility (Android-safe) ===\n"
+    "Never use accessibilityRole=\"heading\" on <Text> — native throws "
+    "\"Invalid accessibility role value: heading\". "
+    "Use accessibilityRole=\"header\" for title-like text instead, or omit the prop. "
+    "Use accessibilityLabel/accessibilityHint where helpful.\n"
+)
+
+
 def agent_verbose() -> bool:
     return os.getenv("CREW_VERBOSE", "false").strip().lower() in ("1", "true", "yes", "on")
+
+
+def builder_fullstack_node_active() -> bool:
+    """True when aligning codegen with deterministic Express scaffold + fetch wiring."""
+    if os.getenv("MODULE", "").strip().lower() != "builder":
+        return False
+    stack = os.getenv("BUILD_STACK", "").strip().lower()
+    backend = os.getenv("BACKEND_RUNTIME", "").strip().lower()
+    return stack == "fullstack" and backend == "node"
+
+
+def builder_fullstack_node_section() -> str:
+    """Merged into APP builder tasks when scaffold provides Notes REST beside RN."""
+    if not builder_fullstack_node_active():
+        return ""
+    return (
+        "\n\n=== Full-stack + Node scaffold (enforce HTTP wiring) ===\n"
+        "The workspace includes deterministic `server/` with `express.json()`, permissive dev CORS, "
+        "`GET /health`, and JSON CRUD at `/api/v1/notes` (in-memory).\n"
+        "**CRITICAL**: `notesApiRoot()` in `src/config/api.ts` is already the collection URL ending in "
+        "`/api/v1/notes`. Use `fetch(notesApiRoot())` or ``fetch(`${notesApiRoot()}/${id}`)`` "
+        '— NEVER append another `/api/v1/notes` suffix.\n'
+        "_contracts SHOULD model Note types `{ id; title; body?; createdAt?; updatedAt? }` compatible "
+        "with POST (`title` required) / PATCH payloads.\n"
+        "Exported APIs under `MODULE=builder`: use the exact exported names declared in MODULE_CONFIG "
+        "`service_functions` (e.g. `createRecord`, `updateRecord`) and wire `AppScreen` imports to match; "
+        "the build may overwrite these files with scaffold-aligned deterministic code.\n"
+        "`appService.ts` MUST persist via REST `fetch` when not overwritten.\n"
+        "`AppScreen.tsx` SHOULD use a multi-section layout at minimum (list/header, composer or editor, delete) "
+        "wired through services.\n"
+    )
+
+
+def builder_fullstack_node_section_compact() -> str:
+    """Shorter REST hint for Groq TPM limits (late stages only)."""
+    if not builder_fullstack_node_active():
+        return ""
+    return (
+        "\nREST: `notesApiRoot()` is the notes collection URL (no double `/api/v1/notes`). "
+        "`build_app` may post-process files (after Crew) — match exports listed in MODULE_CONFIG.\n"
+    )
+
+
+def builder_mode_block(module_key: str, *, compact: bool = False) -> str:
+    """Extra instructions when MODULE=builder (terminal app builder).
+
+    Groq ``on_demand`` tiers often cap TPM (~6k/min). Use ``compact=True`` for ui/qa tasks to stay under limits.
+    """
+    if module_key != "builder":
+        return ""
+    raw_prompt = os.getenv("APP_PROMPT", "").strip()
+    provider = get_llm_provider()
+    prompt = raw_prompt
+    if compact and provider == "groq":
+        max_c = max(900, int(os.getenv("GROQ_BUILDER_PROMPT_MAX_CHARS", "1800")))
+        prompt = truncate_app_prompt_chars(raw_prompt, max_c)
+
+    stack = os.getenv("BUILD_STACK", "frontend").strip()
+    backend = os.getenv("BACKEND_RUNTIME", "").strip()
+    be_line = f"Backend scaffold (if any): `{backend}`.\n" if backend else ""
+    if compact and provider == "groq":
+        fs_section = builder_fullstack_node_section_compact()
+        return (
+            "\n\n=== App builder (Groq-compact task context) ===\n"
+            f"Stack: {stack}\n{be_line}"
+            f"User prompt:\n{prompt or '(none)'}\n"
+            "TypeScript RN; accessibilityRole=\"header\" not \"heading\"; preserve RN infra; "
+            "do not edit root App.tsx.\n"
+            f"{fs_section}"
+        )
+    return (
+        "\n\n=== App builder context (primary) ===\n"
+        f"Target stack surface: {stack}\n"
+        f"{be_line}"
+        f"User prompt:\n{prompt or '(none)'}\n"
+        "Adapt generated artifacts to this prompt. "
+        "Use TypeScript, React Native for the screen, and Detox patterns for E2E.\n"
+        "Preserve RN bootstrap tooling (package.json, ios/, android/, babel/metro/tsconfig, index.js); "
+        "do not edit root App.tsx—the build rewires App.tsx after this pipeline.\n"
+        "Use accessibilityRole=\"header\" (not \"heading\") for titles on Android; never put "
+        "accessibilityRole=\"heading\" on <Text>.\n"
+        "Write generated code under _contracts/, src/, e2e/, and docs/ as required.\n"
+        f"{builder_fullstack_node_section()}"
+    )
 
 
 def parse_rate_limit_sleep_seconds(exc: Exception, default_seconds: float, cap_seconds: float) -> float:
@@ -231,8 +374,12 @@ def parse_rate_limit_sleep_seconds(exc: Exception, default_seconds: float, cap_s
         suggested_sec = float(ms_match.group(1)) / 1000.0
         jitter = random.uniform(0.05, 0.35)
         return min(cap_seconds, max(0.2, suggested_sec + jitter))
-    # Match "... in 12.34s ..." inside JSON/strings (avoid requiring specific char after `s`).
-    s_match = re.search(r"try again in ([0-9.]+)\s*s\b", text, re.IGNORECASE)
+    # Match "... in 12.34s ..." / "Please try again in 24.18s" (Groq JSON bodies).
+    s_match = re.search(
+        r"(?:please\s+)?try again in ([0-9.]+)\s*s",
+        text,
+        re.IGNORECASE,
+    )
     if s_match:
         suggested_sec = float(s_match.group(1))
         jitter = random.uniform(0.15, 0.85)
@@ -258,6 +405,8 @@ def kickoff_stage(crew: Crew, stage_name: str):
                 or "resource_exhausted" in message
                 or "429" in message
                 or "rate limit" in message
+                or ("too large" in message and "token" in message)
+                or ("token" in message and "per minute" in message)
             )
             is_tool_schema_retry = (
                 "tool_use_failed" in message
@@ -282,11 +431,23 @@ def kickoff_stage(crew: Crew, stage_name: str):
 
 def run_staged_pipeline(module_key: str):
     """Run one CrewAI kickoff per pipeline stage; filesystem is the SSOT between stages."""
+    prev_cwd = os.getcwd()
+    os.chdir(get_build_root())
+    try:
+        return _run_staged_pipeline_with_cwd(module_key)
+    finally:
+        os.chdir(prev_cwd)
+
+
+def _run_staged_pipeline_with_cwd(module_key: str):
     llm = build_llm()
     file_writer = FileWriterTool()
     v = agent_verbose()
     config = MODULE_CONFIGS[module_key]
     workflow_mermaid = build_workflow_mermaid(module_key)
+    b_block = builder_mode_block(module_key, compact=False)
+    groq_compact = get_llm_provider() == "groq"
+    b_block_late = builder_mode_block(module_key, compact=True) if groq_compact else b_block
 
     contract_architect = Agent(
         role="ContractArchitectAgent",
@@ -348,6 +509,7 @@ def run_staged_pipeline(module_key: str):
             f"Design SSOT TypeScript contracts for {config['display_name']}.\n"
             f"Include: {config['contracts_desc']}.\n"
             f"{write_contract_instructions(str(config['contracts_path']), 'TypeScript')}"
+            f"{b_block}"
         ),
         expected_output=f"A saved file at {config['contracts_path']} containing interfaces and types only.",
         agent=contract_architect,
@@ -357,15 +519,51 @@ def run_staged_pipeline(module_key: str):
             f"Read {config['contracts_path']} and implement the validation module.\n"
             "Export an error type and validate function with explicit field messages.\n"
             f"{write_contract_instructions(str(config['validation_path']), 'TypeScript')}"
+            f"{b_block}"
         ),
         expected_output=f"A saved file at {config['validation_path']} containing validation helpers.",
         agent=validation_engineer,
+    )
+    data_fs_extra = (
+        ""
+        if not builder_fullstack_node_active()
+        else (
+            "\n\n=== Data layer mandate (BUILD_STACK=fullstack, BACKEND_RUNTIME=node) ===\n"
+            "Prefer `notesApiRoot()`/`getApiBase()` from ../config/api.ts (adjust relative paths from "
+            "src/db/ as needed). `notesApiRoot()` ends with `/api/v1/notes` — use it verbatim for LIST/CREATE; "
+            "use `${notesApiRoot()}/${id}` for PATCH/DELETE. Never concatenate `/api/v1/notes` twice.\n"
+            "Implement list/load/create/update/delete using fetch with typed JSON bodies and response.ok checks. "
+            f"Exported surface should still honour these names conceptually unless impossible: "
+            f"{config['service_functions']} (map semantics to REST operations).\n"
+        )
+    )
+    ui_fs_extra = (
+        ""
+        if not builder_fullstack_node_active()
+        else (
+            "\n\n=== UI mandate (BUILD_STACK=fullstack, BACKEND_RUNTIME=node) ===\n"
+            "Expose at minimum: readable list of notes, fields to compose title/body, create + save/update "
+            "(PATCH) flows, explicit delete UX, loading/error placeholders when fetch fails. Prefer "
+            "ScrollView-friendly multi-section grouping over a dense single-column dump.\n"
+        )
+    )
+    ui_writer_instr = (
+        write_contract_instructions_compact(str(config["screen_path"]), "TSX")
+        if groq_compact
+        else write_contract_instructions(str(config["screen_path"]), "TSX")
+    )
+    qa_writer_instr = (
+        write_contract_instructions_compact(str(config["qa_path"]), "TypeScript (Detox)")
+        if groq_compact
+        else write_contract_instructions(str(config["qa_path"]), "TypeScript (Detox)")
     )
     build_data_task = Task(
         description=(
             f"Read {config['contracts_path']} and implement offline-first data services.\n"
             f"Export functions named: {config['service_functions']}.\n"
             f"{write_contract_instructions(str(config['service_path']), 'TypeScript')}"
+            f"{b_block}"
+            f"{data_fs_extra}"
         ),
         expected_output=f"A saved file at {config['service_path']} containing service functions.",
         agent=data_layer_engineer,
@@ -373,8 +571,12 @@ def run_staged_pipeline(module_key: str):
     build_ui_task = Task(
         description=(
             f"Read {config['contracts_path']}, {config['validation_path']}, and {config['service_path']}.\n"
-            f"Build {config['screen_focus']} in a screen exported as {config['screen_name']}.\n"
-            f"{write_contract_instructions(str(config['screen_path']), 'TSX')}"
+            f"Build {config['screen_focus']} in a screen exported as `{config['screen_name']}` "
+            "(default export; this is what the app entry will render).\n"
+            f"{UI_RN_ANDROID_ACCESSIBILITY_RULES}"
+            f"{ui_writer_instr}"
+            f"{b_block_late}"
+            f"{ui_fs_extra}"
         ),
         expected_output=f"A saved file at {config['screen_path']} containing UI code only.",
         agent=ui_engineer,
@@ -383,7 +585,8 @@ def run_staged_pipeline(module_key: str):
         description=(
             f"Read {config['screen_path']} and write Detox E2E tests.\n"
             "Cover field rendering, valid submission, and invalid validation feedback.\n"
-            f"{write_contract_instructions(str(config['qa_path']), 'TypeScript (Detox)')}"
+            f"{qa_writer_instr}"
+            f"{b_block_late}"
         ),
         expected_output=f"A saved file at {config['qa_path']} containing Detox tests only.",
         agent=qa_engineer,
@@ -392,41 +595,44 @@ def run_staged_pipeline(module_key: str):
         description=(
             f"Write this exact Mermaid graph to {config['workflow_path']}:\n{workflow_mermaid}\n"
             f"{write_contract_instructions(str(config['workflow_path']), 'Mermaid')}"
+            f"{b_block}"
         ),
         expected_output=f"A saved file at {config['workflow_path']} with Mermaid workflow graph.",
         agent=workflow_reporter,
     )
-    build_workflow_alias_task = Task(
-        description=(
-            f"Write the same exact Mermaid graph to docs/workflow.mmd for latest-run convenience:\n{workflow_mermaid}\n"
-            f"{write_contract_instructions('docs/workflow.mmd', 'Mermaid')}"
-        ),
-        expected_output="A saved file at docs/workflow.mmd with Mermaid workflow graph.",
-        agent=workflow_reporter,
-    )
-    build_summary_task = Task(
-        description=(
-            "Write docs/module-summary.md with plain markdown containing:\n"
-            f"1) Module key: {module_key}\n"
-            f"2) Module name: {config['display_name']}\n"
-            f"3) Output files list: {config['contracts_path']}, {config['validation_path']}, {config['service_path']}, "
-            f"{config['screen_path']}, {config['qa_path']}, {config['workflow_path']}\n"
-            f"{write_contract_instructions('docs/module-summary.md', 'Markdown')}"
-        ),
-        expected_output="A saved file at docs/module-summary.md with module run summary.",
-        agent=workflow_reporter,
-    )
 
-    stages: List[tuple[str, Agent, Task]] = [
+    all_stages: List[tuple[str, Agent, Task]] = [
         ("contracts", contract_architect, design_contracts_task),
         ("validation", validation_engineer, build_validation_task),
         ("data_layer", data_layer_engineer, build_data_task),
         ("ui", ui_engineer, build_ui_task),
         ("qa", qa_engineer, build_qa_task),
         ("workflow_mmd", workflow_reporter, build_workflow_task),
-        ("workflow_alias", workflow_reporter, build_workflow_alias_task),
-        ("summary", workflow_reporter, build_summary_task),
     ]
+
+    # build_app.run notes_stack_wire() overwrites contracts/validation/service/screen/e2e for
+    # fullstack+Node — running six LLM stages first burns Groq TPM for output that is discarded.
+    run_all_agents = os.getenv("BUILDER_RUN_ALL_CREW_STAGES", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    if (
+        module_key == "builder"
+        and builder_fullstack_node_active()
+        and not run_all_agents
+    ):
+        stages: List[tuple[str, Agent, Task]] = [
+            ("workflow_mmd", workflow_reporter, build_workflow_task),
+        ]
+        print(
+            "\n[PIPELINE] fullstack + Node: skipping contracts→qa — "
+            "deterministic `notes_stack_wire` replaces those files post-Crew. "
+            "Set BUILDER_RUN_ALL_CREW_STAGES=1 to run every stage.\n",
+            flush=True,
+        )
+    else:
+        stages = all_stages
 
     raw_inter = os.getenv("PIPELINE_INTER_STAGE_SLEEP_SECONDS")
     if raw_inter is not None and raw_inter.strip() != "":
@@ -451,7 +657,68 @@ def run_staged_pipeline(module_key: str):
         if idx < len(stages) - 1 and inter_stage > 0:
             print(f"[STAGE] Pausing {inter_stage:.1f}s before next stage (spread TPM / quota)", flush=True)
             time.sleep(inter_stage)
+
+    finalize_disk_docs_after_workflow(module_key, config)
     return last_result
+
+
+def finalize_disk_docs_after_workflow(module_key: str, config: Dict[str, object]) -> None:
+    """
+    Avoid two extra Groq generations (workflow alias + markdown summary): they duplicate the
+    Mermaid artifact and amplify token/TPM errors. Copy workflow to docs/workflow.mmd and
+    write docs/module-summary.md from a small template instead.
+    """
+    root = get_build_root()
+    docs = root / "docs"
+    docs.mkdir(parents=True, exist_ok=True)
+    wf_src = root / str(config["workflow_path"])
+    wf_dst = docs / "workflow.mmd"
+    if wf_src.is_file():
+        shutil.copyfile(wf_src, wf_dst)
+        print("\n[STAGE] Done: workflow_alias (copy to docs/workflow.mmd)", flush=True)
+    else:
+        print(
+            f"[WARN] Missing {config['workflow_path']}; skipping docs/workflow.mmd copy.",
+            file=sys.stderr,
+        )
+
+    slug = str(config["feature_slug"])
+    name = str(config["display_name"])
+    lines = [
+        "# Module run summary",
+        "",
+        f"- Module key: `{module_key}`",
+        f"- Module name: {name}",
+        f"- Feature slug: `{slug}`",
+        "",
+        "## Output files",
+        "",
+        f"- `{config['contracts_path']}`",
+        f"- `{config['validation_path']}`",
+        f"- `{config['service_path']}`",
+        f"- `{config['screen_path']}`",
+        f"- `{config['qa_path']}`",
+        f"- `{config['workflow_path']}`",
+        "- `docs/workflow.mmd` (alias copy of workflow Mermaid)",
+    ]
+    if module_key == "builder":
+        stack = os.getenv("BUILD_STACK", "").strip()
+        prompt = os.getenv("APP_PROMPT", "").strip()
+        lines.extend(
+            [
+                "",
+                "## Builder",
+                "",
+                f"- Stack: `{stack}`" if stack else "- Stack: (unset)",
+                "",
+                "**Prompt:**",
+                "",
+                prompt if prompt else "(none)",
+            ]
+        )
+    summary_path = docs / "module-summary.md"
+    summary_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print("[STAGE] Done: summary (written to docs/module-summary.md)", flush=True)
 
 
 def build_workflow_mermaid(module_key: str) -> str:
@@ -485,8 +752,9 @@ def get_expected_files(config: Dict[str, object], module_key: str) -> Dict[str, 
 
 def verify_generated_files(expected_files: Dict[str, List[str]]) -> List[str]:
     errors: List[str] = []
+    root = get_build_root()
     for relative_path, required_snippets in expected_files.items():
-        file_path = PROJECT_ROOT / relative_path
+        file_path = root / relative_path
         if not file_path.exists():
             errors.append(f"{relative_path}: missing file")
             continue
@@ -525,15 +793,19 @@ def main() -> int:
         return 1
 
     print_workflow_banner("Execution Completed", module_key)
-    print("\n[INFO] Pipeline finished. Verifying generated files...")
-    validation_errors = verify_generated_files(expected_files)
-    if validation_errors:
-        print("[VALIDATION ERROR] Output did not meet expected contract:", file=sys.stderr)
-        for err in validation_errors:
-            print(f" - {err}", file=sys.stderr)
-        return 2
+    builder_mode = os.getenv("BUILDER_MODE", "").strip().lower() in ("1", "true", "yes", "on")
+    if builder_mode:
+        print("\n[INFO] BUILDER_MODE: skipping strict output verification (see generated files under BUILD_ROOT).")
+    else:
+        print("\n[INFO] Pipeline finished. Verifying generated files...")
+        validation_errors = verify_generated_files(expected_files)
+        if validation_errors:
+            print("[VALIDATION ERROR] Output did not meet expected contract:", file=sys.stderr)
+            for err in validation_errors:
+                print(f" - {err}", file=sys.stderr)
+            return 2
+        print("[SUCCESS] All expected files were generated and validated.")
 
-    print("[SUCCESS] All expected files were generated and validated.")
     print(result)
     return 0
 

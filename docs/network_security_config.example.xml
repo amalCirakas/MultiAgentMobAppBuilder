@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Optional manual drop-in if you skip debug-manifest cleartext:
+     copy to android/app/src/main/res/xml/ and reference from <application>:
+     android:networkSecurityConfig="@xml/network_security_config_example" -->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">localhost</domain>
+        <domain includeSubdomains="true">127.0.0.1</domain>
+        <domain includeSubdomains="true">10.0.2.2</domain>
+    </domain-config>
+</network-security-config>

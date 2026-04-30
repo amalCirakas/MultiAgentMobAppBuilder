@@ -2,6 +2,10 @@
 .env.local
 .venv/
 venv/
+
+# Terminal app builder outputs (per slug); keep folder tracked with .gitkeep only
+Project/*
+!Project/.gitkeep
 __pycache__/
 *.py[cod]
 *.egg-info/

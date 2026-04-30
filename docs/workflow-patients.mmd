@@ -1,7 +1,0 @@
-flowchart TD
-    ContractArchitectAgent["ContractArchitectAgent (patients)"] --> ValidationAgent["ValidationAgent (patients)"]
-    ContractArchitectAgent --> DataLayerAgent["DataLayerAgent (patients)"]
-    ValidationAgent --> UIScreenAgent["UIScreenAgent (patients)"]
-    DataLayerAgent --> UIScreenAgent
-    UIScreenAgent --> QATestAgent["QATestAgent (patients)"]
-    QATestAgent --> WorkflowReporterAgent["WorkflowReporterAgent (patients)"]

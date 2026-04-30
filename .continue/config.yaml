@@ -1,0 +1,43 @@
+name: multiAgentApp Sovereign IDE
+version: 1.0.0
+schema: v1
+
+models:
+  - name: Groq Llama 3.3 70B
+    provider: groq
+    model: llama-3.3-70b-versatile
+    apiKey: ${GROQ_API_KEY}
+    roles:
+      - chat
+      - edit
+      - apply
+
+  - name: Groq Llama 3.1 8B Fast
+    provider: groq
+    model: llama-3.1-8b-instant
+    apiKey: ${GROQ_API_KEY}
+    roles:
+      - autocomplete
+
+context:
+  - provider: code
+  - provider: docs
+  - provider: diff
+  - provider: terminal
+  - provider: problems
+  - provider: folder
+
+rules:
+  - name: Blueprint source of truth
+    rule: |
+      For generated apps in this repository, treat Project/<slug>/docs/blueprints/openapi.yaml
+      and Project/<slug>/docs/blueprints/asyncapi.yaml as the reviewed source of truth.
+      Propose implementation changes only after checking those contracts.
+  - name: Shift-left review
+    rule: |
+      Prefer reviewing and refining contracts before editing runtime code. If implementation
+      behavior conflicts with the blueprint, call out the mismatch first.
+  - name: Repo boundaries
+    rule: |
+      Generated app folders live under Project/<slug>/ and are disposable. Generator code and
+      reusable templates live at the repository root.
